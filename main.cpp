@@ -89,14 +89,15 @@ in vec3 WorldPos;
 in vec3 Normal;
 in vec2 TexCoord;
 
-// Mark's SSS Parameters
+// Mark's SSS Parameters + Disney Model params
 uniform vec3 scatteringCoeff;
 uniform vec3 absorptionCoeff;
 uniform float scatteringDistance;
 uniform vec3 internalColor;
 uniform float thickness;
+uniform float roughness;        // Alpha from the equations
+uniform float subsurfaceMix;    // kss from Disney model
 
-// Scene lighting
 uniform vec3 lightPositions[4];
 uniform vec3 lightColors[4];
 uniform vec3 camPos;
@@ -104,40 +105,80 @@ uniform float time;
 
 const float PI = 3.14159265359;
 
-// Proper subsurface scattering for skin/organic materials
-vec3 calculateSubsurfaceScattering(vec3 L, vec3 N, vec3 V, vec3 lightColor) {
-    // Wrap-around diffuse for subsurface light penetration
+// Disney/Burley Subsurface Scattering (from Mark's textbook)
+vec3 calculateDisneySubsurface(vec3 L, vec3 N, vec3 V, vec3 lightColor, vec3 albedo) {
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 0.0);
+    vec3 H = normalize(L + V);
+    float HdotL = max(dot(H, L), 0.0);
+
+    // Ensure we don't divide by zero
+    if (NdotL <= 0.0 || NdotV <= 0.0) {
+        return vec3(0.0);
+    }
+
+    float alpha = roughness * roughness;
+
+    // FD90 calculation from textbook: FD90 = 0.5 + 2√α(h·l)²
+    float FD90 = 0.5 + 2.0 * sqrt(alpha) * HdotL * HdotL;
+
+    // Disney diffuse fresnel: fd = (1 + (FD90 - 1)(1 - n·l)^5)(1 + (FD90 - 1)(1 - n·v)^5)
+    float fd = (1.0 + (FD90 - 1.0) * pow(1.0 - NdotL, 5.0)) * 
+               (1.0 + (FD90 - 1.0) * pow(1.0 - NdotV, 5.0));
+
+    // FSS90 calculation: FSS90 = √α(h·l)²
+    float FSS90 = sqrt(alpha) * HdotL * HdotL;
+
+    // FSS fresnel term
+    float FSS = (1.0 + (FSS90 - 1.0) * pow(1.0 - NdotL, 5.0)) * 
+                (1.0 + (FSS90 - 1.0) * pow(1.0 - NdotV, 5.0));
+
+    // Subsurface term: fss = (1/(n·l)(n·v) - 0.5)FSS + 0.5
+    float fss = (1.0 / (NdotL * NdotV) - 0.5) * FSS + 0.5;
+
+    // Disney diffuse BRDF: fdiff(l,v) = χ⁺(n·l)χ⁺(n·v)(ρss/π)((1-kss)fd + 1.25kss*fss)
+    // χ⁺ is max(0, x), which we already applied to NdotL and NdotV
+    vec3 rho_ss = albedo; // Surface albedo
+    float kss = subsurfaceMix; // Subsurface mix factor
+
+    vec3 fdiff = NdotL * NdotV * (rho_ss / PI) * ((1.0 - kss) * fd + 1.25 * kss * fss);
+
+    return fdiff * lightColor;
+}
+
+// Enhanced subsurface scattering with proper scattering/absorption
+vec3 calculateEnhancedSSS(vec3 L, vec3 N, vec3 V, vec3 lightColor) {
+    // Wrap-around lighting for subsurface penetration
     float wrap = scatteringDistance;
     float NdotL = dot(N, L);
     float wrappedDiffuse = max(0.0, (NdotL + wrap) / (1.0 + wrap));
 
-    // Transmission component - light passing through material
+    // Transmission component with proper thickness
     vec3 H = normalize(L + N * scatteringDistance);
     float VdotH = max(0.0, dot(-V, H));
-    float transmission = pow(VdotH, 2.0) * thickness;
+    float transmission = pow(VdotH, 3.0) * thickness;
 
-    // Apply wavelength-dependent scattering and absorption
+    // Apply Mark's scattering and absorption coefficients
     vec3 scatteredLight = lightColor * scatteringCoeff * wrappedDiffuse;
     vec3 transmittedLight = lightColor * internalColor * transmission;
 
-    // Beer's law approximation for absorption
-    vec3 attenuation = exp(-absorptionCoeff * scatteringDistance * 2.0);
+    // Beer's law for absorption with proper distance scaling
+    vec3 attenuation = exp(-absorptionCoeff * scatteringDistance * 3.0);
 
     return (scatteredLight + transmittedLight) * attenuation;
 }
 
-// Simple global illumination for complex scenes
+// Improved scene GI
 vec3 calculateSceneGI(vec3 worldPos, vec3 normal) {
-    // Environment mapping approximation
-    vec3 ambient = vec3(0.15, 0.15, 0.18);
+    vec3 ambient = vec3(0.12, 0.12, 0.15);
 
-    // Fake sky dome contribution
+    // Sky hemisphere
     float skyFactor = max(0.0, dot(normal, vec3(0, 1, 0)));
-    vec3 skyContribution = vec3(0.4, 0.6, 1.0) * skyFactor * 0.3;
+    vec3 skyContribution = vec3(0.4, 0.6, 1.0) * skyFactor * 0.25;
 
-    // Ground bounce approximation
+    // Ground bounce
     float groundFactor = max(0.0, dot(normal, vec3(0, -1, 0)));
-    vec3 groundContribution = vec3(0.8, 0.6, 0.4) * groundFactor * 0.1;
+    vec3 groundContribution = vec3(0.8, 0.6, 0.4) * groundFactor * 0.08;
 
     return ambient + skyContribution + groundContribution;
 }
@@ -146,12 +187,13 @@ void main() {
     vec3 N = normalize(Normal);
     vec3 V = normalize(camPos - WorldPos);
 
-    // Global illumination for scene
+    // Scene global illumination
     vec3 globalIllum = calculateSceneGI(WorldPos, N);
 
-    // Direct lighting + SSS
-    vec3 directLighting = vec3(0.0);
-    vec3 sssLighting = vec3(0.0);
+    // Material properties
+    vec3 albedo = vec3(0.7, 0.5, 0.4); // Skin-like base color
+
+    vec3 totalLighting = vec3(0.0);
 
     for(int i = 0; i < 4; ++i) {
         vec3 L = normalize(lightPositions[i] - WorldPos);
@@ -159,20 +201,21 @@ void main() {
         float attenuation = 1.0 / (distance * distance + 1.0);
         vec3 radiance = lightColors[i] * attenuation;
 
-        // Direct diffuse (6% for skin as research shows)
-        float NdotL = max(dot(N, L), 0.0);
-        vec3 albedo = vec3(0.7, 0.5, 0.4); // Skin-like base color
-        directLighting += albedo * radiance * NdotL * 0.06;
+        // Disney subsurface scattering (from Mark's textbook)
+        vec3 disneySSS = calculateDisneySubsurface(L, N, V, radiance, albedo);
 
-        // Subsurface scattering (94% for skin as research shows)
-        sssLighting += calculateSubsurfaceScattering(L, N, V, radiance) * 0.94;
+        // Enhanced SSS with Mark's parameters
+        vec3 enhancedSSS = calculateEnhancedSSS(L, N, V, radiance);
+
+        // Blend both approaches for maximum realism
+        totalLighting += disneySSS * 0.6 + enhancedSSS * 0.4;
     }
 
-    // Combine all lighting
-    vec3 finalColor = globalIllum * 0.4 + directLighting + sssLighting;
+    // Combine with global illumination
+    vec3 finalColor = globalIllum * 0.3 + totalLighting;
 
     // Professional tone mapping (ACES)
-    finalColor = finalColor * 0.6; // Exposure
+    finalColor = finalColor * 0.8; // Exposure control
     finalColor = (finalColor * (2.51 * finalColor + 0.03)) / (finalColor * (2.43 * finalColor + 0.59) + 0.14);
 
     // Gamma correction
@@ -180,6 +223,7 @@ void main() {
 
     FragColor = vec4(finalColor, 1.0);
 }
+
 )";
 
 class SceneDemo {
@@ -207,6 +251,26 @@ public:
         if (glewInit() != GLEW_OK) return false;
 
         createShaders();
+
+        // ALWAYS generate test spheres first
+        std::cout << "Generating test geometry..." << std::endl;
+        generateComplexScene();
+
+        // THEN try to load professional models (additive)
+        if (loadModel("models/sponza/sponza.obj")) {
+            std::cout << "Added Sponza to scene!" << std::endl;
+        }
+        if (loadModel("models/bistro/bistro.obj")) {
+            std::cout << "Added Bistro to scene!" << std::endl;
+        }
+        if (loadModel("models/bunny.obj")) {
+            std::cout << "Added Bunny to scene!" << std::endl;
+        }
+        if (loadModel("models/lucy.obj")) {
+            std::cout << "Added Lucy to scene!" << std::endl;
+        }
+
+        std::cout << "Total meshes in scene: " << meshes.size() << std::endl;
 
         // Try to load a professional model, fallback to procedural if not found
         if (!loadModel("models/sponza/sponza.obj") && 
@@ -472,6 +536,8 @@ public:
         glUniform3fv(glGetUniformLocation(shaderProgram, "lightPositions"), 4, glm::value_ptr(lightPositions[0]));
         glUniform3fv(glGetUniformLocation(shaderProgram, "lightColors"), 4, glm::value_ptr(lightColors[0]));
         glUniform3fv(glGetUniformLocation(shaderProgram, "camPos"), 1, glm::value_ptr(cameraPos));
+        glUniform1f(glGetUniformLocation(shaderProgram, "roughness"), 0.5f);
+        glUniform1f(glGetUniformLocation(shaderProgram, "subsurfaceMix"), 0.8f);
 
         // Render all meshes
         for (auto& mesh : meshes) {
