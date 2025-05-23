@@ -231,7 +231,8 @@ private:
     GLFWwindow* window;
     GLuint shaderProgram;
     std::vector<Mesh> meshes;
-    glm::vec3 cameraPos = glm::vec3(0.0f, 2.0f, 5.0f);
+    glm::vec3 cameraPos = glm::vec3(0.0f, 5.0f, 15.0f); // BETTER starting position
+    float cameraSpeed = 5.0f; // Faster movement
 
 public:
     bool initialize() {
@@ -294,17 +295,27 @@ public:
     bool loadModel(const std::string& path) {
         Assimp::Importer importer;
         const aiScene* scene = importer.ReadFile(path, 
-            aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace | aiProcess_GenNormals);
+            aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace | 
+            aiProcess_GenNormals | aiProcess_PreTransformVertices);
 
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-            std::cout << "Failed to load model: " << path << std::endl;
+            std::cout << "❌ Failed to load model: " << path << std::endl;
+            std::cout << "   Error: " << importer.GetErrorString() << std::endl;
             return false;
         }
 
-        std::cout << "Loading professional model: " << path << std::endl;
+        std::cout << "✅ Loading model: " << path << std::endl;
+        std::cout << "   Meshes: " << scene->mNumMeshes << std::endl;
+        std::cout << "   Materials: " << scene->mNumMaterials << std::endl;
+
+        size_t startMeshCount = meshes.size();
         processNode(scene->mRootNode, scene);
+        size_t endMeshCount = meshes.size();
+
+        std::cout << "   Added " << (endMeshCount - startMeshCount) << " mesh objects" << std::endl;
         return true;
     }
+
 
     void processNode(aiNode* node, const aiScene* scene) {
         // Process all meshes in current node
@@ -502,15 +513,24 @@ public:
 
         float time = glfwGetTime();
 
-        // Camera setup
-        glm::mat4 view = glm::lookAt(cameraPos, cameraPos + glm::vec3(0, 0, -1), glm::vec3(0, 1, 0));
-        glm::mat4 projection = glm::perspective(glm::radians(45.0f), 1200.0f / 800.0f, 0.1f, 100.0f);
-        glm::mat4 model = glm::mat4(1.0f);
+        // FIXED: Better camera positioning for loaded models
+        glm::vec3 target = glm::vec3(0.0f, 0.0f, 0.0f);
+        glm::mat4 view = glm::lookAt(cameraPos, target, glm::vec3(0, 1, 0));
+        glm::mat4 projection = glm::perspective(glm::radians(45.0f), 1200.0f / 800.0f, 0.1f, 1000.0f); // Increased far plane
 
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
-        glUniform1f(glGetUniformLocation(shaderProgram, "time"), time);
+        // Enhanced lighting setup
+        glm::vec3 lightPositions[] = {
+            glm::vec3(sin(time * 0.5f) * 15.0f, 8.0f, cos(time * 0.5f) * 15.0f),  // Bigger orbit
+            glm::vec3(-sin(time * 0.3f) * 10.0f, 5.0f, -cos(time * 0.3f) * 10.0f),
+            glm::vec3(8.0f, 4.0f, 8.0f),
+            glm::vec3(-8.0f, 4.0f, -8.0f)
+        };
+        glm::vec3 lightColors[] = {
+            glm::vec3(4.0f, 3.5f, 3.0f),
+            glm::vec3(3.0f, 3.5f, 4.0f),
+            glm::vec3(3.5f, 4.0f, 3.5f),
+            glm::vec3(3.8f, 3.8f, 3.8f)
+        };
 
         // Mark's SSS parameters
         glUniform3f(glGetUniformLocation(shaderProgram, "scatteringCoeff"), 0.8f, 0.6f, 0.4f);
@@ -518,32 +538,53 @@ public:
         glUniform1f(glGetUniformLocation(shaderProgram, "scatteringDistance"), 0.3f);
         glUniform3f(glGetUniformLocation(shaderProgram, "internalColor"), 0.9f, 0.5f, 0.3f);
         glUniform1f(glGetUniformLocation(shaderProgram, "thickness"), 0.4f);
-
-        // Dynamic scene lighting
-        glm::vec3 lightPositions[] = {
-            glm::vec3(sin(time * 0.5f) * 8.0f, 4.0f, cos(time * 0.5f) * 8.0f),
-            glm::vec3(-sin(time * 0.3f) * 6.0f, 3.0f, -cos(time * 0.3f) * 6.0f),
-            glm::vec3(4.0f, 2.0f, 4.0f),
-            glm::vec3(-4.0f, 2.0f, -4.0f)
-        };
-        glm::vec3 lightColors[] = {
-            glm::vec3(4.0f, 3.5f, 3.0f),   // Warm key light
-            glm::vec3(3.0f, 3.5f, 4.0f),  // Cool fill light  
-            glm::vec3(3.5f, 4.0f, 3.5f),  // Green accent
-            glm::vec3(3.8f, 3.8f, 3.8f)   // Neutral fill
-        };
+        glUniform1f(glGetUniformLocation(shaderProgram, "roughness"), 0.5f);
+        glUniform1f(glGetUniformLocation(shaderProgram, "subsurfaceMix"), 0.8f);
 
         glUniform3fv(glGetUniformLocation(shaderProgram, "lightPositions"), 4, glm::value_ptr(lightPositions[0]));
         glUniform3fv(glGetUniformLocation(shaderProgram, "lightColors"), 4, glm::value_ptr(lightColors[0]));
         glUniform3fv(glGetUniformLocation(shaderProgram, "camPos"), 1, glm::value_ptr(cameraPos));
-        glUniform1f(glGetUniformLocation(shaderProgram, "roughness"), 0.5f);
-        glUniform1f(glGetUniformLocation(shaderProgram, "subsurfaceMix"), 0.8f);
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
 
-        // Render all meshes
-        for (auto& mesh : meshes) {
-            mesh.Draw();
+        // FIXED: Render each mesh with appropriate scaling
+        for (size_t i = 0; i < meshes.size(); ++i) {
+            glm::mat4 model = glm::mat4(1.0f);
+
+            // Different scaling and positioning for different objects
+            if (i < 5) {
+                // First 5 meshes are our generated spheres - keep them small
+                model = glm::scale(model, glm::vec3(1.0f));
+            } else {
+                // Professional models - scale them appropriately
+                if (i == 5) {
+                    // First loaded model (likely bunny or lucy) - center and scale
+                    model = glm::translate(model, glm::vec3(5.0f, 0.0f, 0.0f));
+                    model = glm::scale(model, glm::vec3(0.01f)); // Scale down big models
+                } else if (i == 6) {
+                    // Second model
+                    model = glm::translate(model, glm::vec3(-5.0f, 0.0f, 0.0f));
+                    model = glm::scale(model, glm::vec3(0.01f));
+                } else {
+                    // Other models - spread them out
+                    float angle = (i - 7) * 60.0f * PI / 180.0f;
+                    model = glm::translate(model, glm::vec3(cos(angle) * 8.0f, 0.0f, sin(angle) * 8.0f));
+                    model = glm::scale(model, glm::vec3(0.005f)); // Even smaller for complex models
+                }
+            }
+
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+            meshes[i].Draw();
+        }
+
+        // Debug output
+        static int frameCount = 0;
+        if (++frameCount % 60 == 0) {
+            std::cout << "Rendering " << meshes.size() << " meshes. Camera at (" 
+                      << cameraPos.x << ", " << cameraPos.y << ", " << cameraPos.z << ")" << std::endl;
         }
     }
+
 };
 
 int main() {
