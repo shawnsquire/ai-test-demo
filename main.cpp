@@ -218,13 +218,13 @@ void main() {
     vec3 N = normalize(Normal);
     vec3 V = normalize(camPos - WorldPos);
 
-    // === REAL GLOBAL ILLUMINATION ===
-    vec3 indirectLighting = calculateRealGlobalIllumination(WorldPos, N);
-    vec3 probeLighting = calculateLightProbeGI(WorldPos, N);
+    // === REAL GLOBAL ILLUMINATION (reduced intensity) ===
+    vec3 indirectLighting = calculateRealGlobalIllumination(WorldPos, N) * 0.15; // Reduced
+    vec3 probeLighting = calculateLightProbeGI(WorldPos, N) * 0.25; // Reduced
     float ambientOcclusion = calculateSSAO(WorldPos, N);
 
-    // Combine GI techniques
-    vec3 globalIllumination = (indirectLighting * 0.6 + probeLighting * 0.4) * ambientOcclusion;
+    // Combine GI techniques (much lower intensity)
+    vec3 globalIllumination = (indirectLighting + probeLighting) * ambientOcclusion;
 
     // === DIRECT LIGHTING + SUBSURFACE SCATTERING ===
     vec3 directLighting = vec3(0.0);
@@ -233,27 +233,31 @@ void main() {
     for(int i = 0; i < 4; ++i) {
         vec3 L = normalize(lightPositions[i] - WorldPos);
         float distance = length(lightPositions[i] - WorldPos);
-        float attenuation = 1.0 / (distance * distance);
+        float attenuation = 1.0 / (distance * distance + 1.0); // Added +1.0 to prevent division by zero
         vec3 radiance = lightColors[i] * attenuation;
 
         // Direct diffuse (minimal for skin)
         float NdotL = max(dot(N, L), 0.0);
-        vec3 albedo = vec3(0.6, 0.4, 0.3);
-        directLighting += albedo * radiance * NdotL * 0.06; // Only 6% direct
+        vec3 albedo = vec3(0.4, 0.3, 0.2); // Darker base color
+        directLighting += albedo * radiance * NdotL * 0.06;
 
-        // Subsurface scattering (94% for skin)
-        sssLighting += calculateSubsurfaceScattering(L, N, V, radiance) * 0.94;
+        // Subsurface scattering (controlled intensity)
+        sssLighting += calculateSubsurfaceScattering(L, N, V, radiance) * 0.3; // Much lower
     }
 
-    // === COMBINE ALL LIGHTING ===
-    vec3 finalColor = globalIllumination + directLighting + sssLighting;
+    // === COMBINE ALL LIGHTING (with proper scaling) ===
+    vec3 finalColor = globalIllumination * 0.4 + directLighting + sssLighting;
 
-    // HDR tone mapping and gamma correction
-    finalColor = finalColor / (finalColor + vec3(1.0));
+    // Better HDR tone mapping (ACES approximation)
+    finalColor = finalColor * 0.8; // Overall exposure reduction
+    finalColor = (finalColor * (2.51 * finalColor + 0.03)) / (finalColor * (2.43 * finalColor + 0.59) + 0.14);
+
+    // Gamma correction
     finalColor = pow(finalColor, vec3(1.0/2.2));
 
     FragColor = vec4(finalColor, 1.0);
 }
+
 )";
 
 class RealGIDemo {
@@ -417,14 +421,14 @@ private:
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
         glUniform1f(glGetUniformLocation(shaderProgram, "time"), time);
 
-        // Mark's SSS parameters - all controllable
-        glUniform3f(glGetUniformLocation(shaderProgram, "scatteringCoeff"), 0.9f, 0.7f, 0.5f);
-        glUniform3f(glGetUniformLocation(shaderProgram, "absorptionCoeff"), 0.1f, 0.3f, 0.6f);
-        glUniform1f(glGetUniformLocation(shaderProgram, "scatteringDistance"), 0.4f);
-        glUniform3f(glGetUniformLocation(shaderProgram, "internalColor"), 1.0f, 0.6f, 0.4f);
+        // Mark's SSS parameters - FIXED values
+        glUniform3f(glGetUniformLocation(shaderProgram, "scatteringCoeff"), 0.7f, 0.5f, 0.3f);
+        glUniform3f(glGetUniformLocation(shaderProgram, "absorptionCoeff"), 0.1f, 0.2f, 0.4f);
+        glUniform1f(glGetUniformLocation(shaderProgram, "scatteringDistance"), 0.2f);
+        glUniform3f(glGetUniformLocation(shaderProgram, "internalColor"), 0.8f, 0.4f, 0.2f);
         glUniform1f(glGetUniformLocation(shaderProgram, "thickness"), 0.3f);
 
-        // Dynamic lighting
+        // FIXED: Much lower light intensities
         glm::vec3 lightPositions[] = {
             glm::vec3(sin(time) * 3.0f, 2.0f, cos(time) * 3.0f),
             glm::vec3(-sin(time) * 2.0f, 1.0f, -cos(time) * 2.0f),
@@ -432,10 +436,10 @@ private:
             glm::vec3(-2.0f, -1.0f, -2.0f)
         };
         glm::vec3 lightColors[] = {
-            glm::vec3(100.0f, 80.0f, 60.0f),   // Warm key light
-            glm::vec3(60.0f, 80.0f, 100.0f),  // Cool fill light
-            glm::vec3(80.0f, 100.0f, 80.0f),  // Green accent
-            glm::vec3(90.0f, 90.0f, 90.0f)    // Neutral
+            glm::vec3(3.0f, 2.5f, 2.0f),   // MUCH lower values!
+            glm::vec3(2.0f, 2.5f, 3.0f),  
+            glm::vec3(2.5f, 3.0f, 2.5f),  
+            glm::vec3(2.8f, 2.8f, 2.8f)   
         };
 
         glUniform3fv(glGetUniformLocation(shaderProgram, "lightPositions"), 4, glm::value_ptr(lightPositions[0]));
@@ -445,6 +449,7 @@ private:
         glBindVertexArray(sphereVAO);
         glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
     }
+
 };
 
 int main() {
