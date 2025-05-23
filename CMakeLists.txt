@@ -8,6 +8,7 @@ pkg_search_module(GLFW REQUIRED glfw3)
 find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(glm REQUIRED)
+find_package(assimp REQUIRED)
 
 add_executable(sss_demo main.cpp)
 
@@ -15,7 +16,7 @@ target_link_libraries(sss_demo
     ${GLFW_LIBRARIES} 
     ${OPENGL_LIBRARIES} 
     GLEW::GLEW
+    assimp
 )
 
 target_include_directories(sss_demo PRIVATE ${GLFW_INCLUDE_DIRS})
-
