@@ -30,8 +30,8 @@ sudo pacman -S wget curl unzip
 ### 2. Clone and Build
 ```sh
 # Clone the project
-git clone <your-repo-url>
-cd subsurface-scattering-demo
+git clone https://github.com/shawnsquire/ai-test-demo
+cd ai-test-demo
 
 # Create build directory
 mkdir build
@@ -41,7 +41,7 @@ cd build
 cmake ..
 
 # Build the project
-make -j$(nproc)
+make
 ```
 
 ### 3. Set Up Professional Models
@@ -143,7 +143,7 @@ sudo pacman -S nvidia nvidia-utils  # NVIDIA
 cd build
 make clean
 cmake ..
-make -j$(nproc)
+make
 
 ldd ./sss_demo  # Check for missing dependencies
 ```
